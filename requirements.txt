@@ -1,0 +1,11 @@
+streamlit
+yfinance
+numpy
+pandas
+scipy
+altair
+pykrx
+finvizfinance
+lxml
+beautifulsoup4
+requests
