@@ -10,11 +10,22 @@
 """
 
 from datetime import date, timedelta
+import importlib
 
 import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
+
+# 클라우드 핫 리로드 대응: 코드가 갱신돼도 보조 모듈이 구버전으로
+# 메모리에 남는 경우가 있어, 최신 함수가 없으면 모듈을 강제로 다시 읽는다.
+# (모듈에 새 함수를 추가하면 아래 감지용 함수 이름도 최신 것으로 바꿔줄 것)
+import portfolio_risk_parity_capm as _core_mod
+import stock_screener as _screener_mod
+if not hasattr(_core_mod, "download_prices_range"):
+    importlib.reload(_core_mod)
+if not hasattr(_screener_mod, "rerank_universe_asof"):
+    importlib.reload(_screener_mod)
 
 # 앞서 만든 계산 로직 재사용
 from portfolio_risk_parity_capm import (
