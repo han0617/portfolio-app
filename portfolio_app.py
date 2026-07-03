@@ -50,15 +50,16 @@ def get_prices_range(tickers, start, end, interval="1d"):
 
 
 @st.cache_data(show_spinner=False, ttl=21600)
-def get_screen_universe(markets, size_top):
+def get_screen_universe(markets, size_top, as_of=None):
     from stock_screener import fetch_universe, add_price_factors
-    return add_price_factors(fetch_universe(tuple(markets), size_top=size_top))
+    return add_price_factors(fetch_universe(tuple(markets), size_top=size_top),
+                             as_of=as_of)
 
 
 @st.cache_data(show_spinner=False, ttl=21600)
-def get_us_screen_universe(index_name):
+def get_us_screen_universe(index_name, as_of=None):
     from stock_screener import fetch_us_universe, add_price_factors
-    return add_price_factors(fetch_us_universe(index_name))
+    return add_price_factors(fetch_us_universe(index_name), as_of=as_of)
 
 
 # ============================================================
@@ -179,6 +180,23 @@ with st.expander("🔎 종목 스크리너 — 어떤 종목을 살지 모르겠
                                 ["대형주 (시총 상위 200)", "중대형주 (상위 500)"])
     scr_topn = s3.slider("뽑을 종목 수", 5, 20, 10)
 
+    t1, t2 = st.columns([1, 2])
+    past_mode = t1.checkbox(
+        "🕰️ 과거 시점 스크리닝", value=False,
+        help="과거 특정 날짜에 이 조건으로 스크리닝했다면 어떤 종목이 뽑혔을지 재현합니다. "
+             "전략 신뢰도 검증용 — 뽑힌 종목을 아래 백테스트에서 그 날짜부터 사보면 됩니다.",
+    )
+    scr_asof = None
+    if past_mode:
+        scr_asof = t2.date_input(
+            "스크리닝 시점", value=date.today() - timedelta(days=365),
+            min_value=date(2000, 1, 1), max_value=date.today(), key="scr_asof",
+        )
+        st.caption("⚠️ 과거 시점 모드는 **주가 기반 팩터(모멘텀·신고가·거래대금)만** 사용합니다. "
+                   "PER·ROE는 데이터 소스가 현재 값만 제공해서, 과거 재현에 쓰면 미래정보가 "
+                   "섞이기 때문이에요. 종목 후보도 '현재' 시총 상위 기준이라 약간의 생존 편향이 "
+                   "있다는 점은 감안하고 보세요.")
+
     preset = st.radio(
         "전략 유형",
         ["🏦 중장기 가치+우량 (분기~연 단위 보유)",
@@ -217,17 +235,29 @@ with st.expander("🔎 종목 스크리너 — 어떤 종목을 살지 모르겠
                 "참고로 1개월 모멘텀 단독은 오히려 반전되는 경향이 있어 3개월을 기본으로 했어요.")
 
     if st.button("🔎 종목 찾기", type="primary"):
-        if not selected_factors:
-            st.error("팩터를 1개 이상 선택해주세요.")
+        # 과거 시점 모드에선 현재값만 있는 펀더멘털 팩터(PER·ROE) 제외
+        use_factors = list(selected_factors)
+        dropped_factors = []
+        if past_mode:
+            dropped_factors = [f for f in use_factors if f in ("저PER", "고ROE")]
+            use_factors = [f for f in use_factors if f not in ("저PER", "고ROE")]
+
+        if not use_factors:
+            if past_mode:
+                st.error("과거 시점 모드에서 쓸 수 있는 팩터(모멘텀·신고가·거래대금)를 "
+                         "1개 이상 선택해주세요. (PER·ROE는 과거 재현 불가)")
+            else:
+                st.error("팩터를 1개 이상 선택해주세요.")
         else:
             from stock_screener import screen_stocks
+            as_of_str = str(scr_asof) if past_mode else None
             try:
                 with st.spinner("종목을 선별하는 중... (처음엔 30초~1분 걸릴 수 있어요)"):
                     if is_us:
                         idx_key = {"미국 S&P500": "SP500",
                                    "미국 나스닥100": "NASDAQ100",
                                    "미국 다우30": "DJIA"}[scr_market]
-                        uni = get_us_screen_universe(idx_key)
+                        uni = get_us_screen_universe(idx_key, as_of_str)
                         st.session_state["screen_bench"] = {
                             "SP500": "^GSPC", "NASDAQ100": "^IXIC", "DJIA": "^DJI",
                         }[idx_key]
@@ -236,18 +266,29 @@ with st.expander("🔎 종목 스크리너 — 어떤 종목을 살지 모르겠
                         markets = {"코스피": ("KOSPI",), "코스닥": ("KOSDAQ",),
                                    "코스피+코스닥": ("KOSPI", "KOSDAQ")}[scr_market]
                         size_top = 200 if scr_size.startswith("대형주") else 500
-                        uni = get_screen_universe(markets, size_top)
+                        uni = get_screen_universe(markets, size_top, as_of_str)
                         st.session_state["screen_bench"] = "^KS11"
                         st.session_state["screen_currency"] = "₩ 원"
                     st.session_state["screen_result"] = screen_stocks(
-                        uni, selected_factors, top_n=scr_topn,
+                        uni, use_factors, top_n=scr_topn,
                     )
+                    st.session_state["screen_asof"] = as_of_str
+                    st.session_state["screen_dropped"] = dropped_factors
                     st.session_state.pop("diverse_result", None)  # 이전 조합 결과 초기화
             except Exception as e:
                 st.error(f"선별 중 오류가 발생했습니다: {e}")
 
     scr_res = st.session_state.get("screen_result")
     if scr_res is not None and len(scr_res) > 0:
+        res_asof = st.session_state.get("screen_asof")
+        if res_asof:
+            dropped = st.session_state.get("screen_dropped") or []
+            note = f"🕰️ **{res_asof} 시점 기준** 스크리닝 결과입니다 (그 이후 정보 미사용)."
+            if dropped:
+                note += f" 제외된 팩터: {', '.join(dropped)}"
+            note += (f" — 신뢰도 검증: 아래 백테스트에서 매수일을 {res_asof}로 잡고 "
+                     "그 뒤 성과를 확인해보세요.")
+            st.info(note)
         st.dataframe(scr_res, use_container_width=True)
         st.caption("종합점수 = 선택한 팩터별 백분위 순위(0~100)의 평균. 높을수록 조건에 잘 맞는 종목.")
         if st.button("📌 이 종목들로 포트폴리오 구성", type="primary"):

@@ -167,17 +167,27 @@ def fetch_us_universe(index_name="SP500"):
     return out
 
 
-def add_price_factors(df, period="1y"):
+def add_price_factors(df, period="1y", as_of=None):
     """
     야후 파이낸스에서 1년치 주가/거래량을 일괄 다운로드해 가격 기반 팩터를 추가.
       - 1/3/6개월 수익률(%)
       - 52주고점대비(%)  : 현재가가 52주 최고가에서 얼마나 떨어져 있나 (0에 가까울수록 신고가 근접)
       - 변동성(%)        : 최근 3개월 일간수익률 표준편차의 연율화
       - 거래대금비율     : 최근 20일 평균 거래대금 / 직전 60일 평균 (1보다 크면 관심 유입)
+
+    as_of: 'YYYY-MM-DD' 문자열/날짜를 주면 그 시점까지의 데이터만으로 계산
+           (과거 시점 스크리닝 재현용 — 해당일 이후 정보는 전혀 쓰지 않음)
     """
     tickers = list(df["티커"])
-    raw = yf.download(tickers, period=period, interval="1d",
-                      auto_adjust=True, progress=False)
+    if as_of is None:
+        raw = yf.download(tickers, period=period, interval="1d",
+                          auto_adjust=True, progress=False)
+    else:
+        end_ts = pd.Timestamp(as_of)
+        start = (end_ts - pd.Timedelta(days=370)).strftime("%Y-%m-%d")
+        end = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")   # 야후 end 미포함
+        raw = yf.download(tickers, start=start, end=end, interval="1d",
+                          auto_adjust=True, progress=False)
     close, vol = raw["Close"], raw["Volume"]
     if isinstance(close, pd.Series):
         close = close.to_frame(name=tickers[0])
