@@ -51,15 +51,25 @@ def get_prices_range(tickers, start, end, interval="1d"):
 
 @st.cache_data(show_spinner=False, ttl=21600)
 def get_screen_universe(markets, size_top, as_of=None):
-    from stock_screener import fetch_universe, add_price_factors
-    return add_price_factors(fetch_universe(tuple(markets), size_top=size_top),
-                             as_of=as_of)
+    from stock_screener import (fetch_universe, add_price_factors,
+                                rerank_universe_asof)
+    # 과거 시점 모드: 2배수로 넓게 모은 뒤 '당시 시총 순위'로 재선정
+    pool = size_top * 2 if as_of else size_top
+    uni = fetch_universe(tuple(markets), size_top=pool)
+    if as_of:
+        uni = rerank_universe_asof(uni, as_of, size_top)
+    return add_price_factors(uni, as_of=as_of)
 
 
 @st.cache_data(show_spinner=False, ttl=21600)
 def get_us_screen_universe(index_name, as_of=None):
-    from stock_screener import fetch_us_universe, add_price_factors
-    return add_price_factors(fetch_us_universe(index_name), as_of=as_of)
+    from stock_screener import (fetch_us_universe, add_price_factors,
+                                rerank_universe_asof)
+    uni = fetch_us_universe(index_name)
+    if as_of:
+        # 지수 구성종목은 고정이므로 당시 미상장 종목 제거 + 시총을 당시 값으로 환산
+        uni = rerank_universe_asof(uni, as_of, len(uni))
+    return add_price_factors(uni, as_of=as_of)
 
 
 # ============================================================
@@ -194,8 +204,9 @@ with st.expander("🔎 종목 스크리너 — 어떤 종목을 살지 모르겠
         )
         st.caption("⚠️ 과거 시점 모드는 **주가 기반 팩터(모멘텀·신고가·거래대금)만** 사용합니다. "
                    "PER·ROE는 데이터 소스가 현재 값만 제공해서, 과거 재현에 쓰면 미래정보가 "
-                   "섞이기 때문이에요. 종목 후보도 '현재' 시총 상위 기준이라 약간의 생존 편향이 "
-                   "있다는 점은 감안하고 보세요.")
+                   "섞이기 때문이에요. **종목 후보는 지정일 당시 주가로 시총 순위를 되돌려 "
+                   "재구성**하며(당시 미상장 종목 자동 제외), 표의 시가총액도 당시 근사치입니다. "
+                   "다만 그 사이 상장폐지된 종목은 넣을 수 없어 약간의 생존 편향이 남습니다.")
 
     preset = st.radio(
         "전략 유형",

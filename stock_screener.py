@@ -167,6 +167,48 @@ def fetch_us_universe(index_name="SP500"):
     return out
 
 
+def rerank_universe_asof(df, as_of, size_top):
+    """
+    현재 유니버스의 시가총액을 as_of 시점 주가 비율(당시가/현재가)로 되돌려
+    '당시 시총 순위'를 근사 재구성하고 상위 size_top개를 반환.
+      - as_of에 상장돼 있지 않던 종목(당시 가격 없음)은 자동 제외
+      - 주가 비율 근사라 증자/자사주 소각 등 주식 수 변화는 반영 못 함
+      - 당시 상장돼 있었으나 이후 상장폐지된 종목은 후보에 넣을 수 없음 (한계)
+    """
+    tickers = list(df["티커"])
+    end_ts = pd.Timestamp(as_of)
+
+    px_then = yf.download(
+        tickers,
+        start=(end_ts - pd.Timedelta(days=14)).strftime("%Y-%m-%d"),
+        end=(end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+        interval="1d", auto_adjust=False, progress=False,
+    )["Close"]
+    px_now = yf.download(tickers, period="5d", interval="1d",
+                         auto_adjust=False, progress=False)["Close"]
+    if isinstance(px_then, pd.Series):
+        px_then = px_then.to_frame(name=tickers[0])
+    if isinstance(px_now, pd.Series):
+        px_now = px_now.to_frame(name=tickers[0])
+
+    ratio = {}
+    for t in tickers:
+        p0 = px_then[t].dropna() if t in px_then.columns else pd.Series(dtype=float)
+        p1 = px_now[t].dropna() if t in px_now.columns else pd.Series(dtype=float)
+        ratio[t] = (p0.iloc[-1] / p1.iloc[-1]) \
+            if len(p0) > 0 and len(p1) > 0 and p1.iloc[-1] > 0 else np.nan
+
+    out = df.copy()
+    cap_col = next((c for c in out.columns if c.startswith("시가총액")), None)
+    if cap_col is None:
+        raise ValueError("시가총액 컬럼이 없습니다.")
+    out[cap_col] = out[cap_col] * out["티커"].map(ratio)
+    out = out.dropna(subset=[cap_col])
+    out = out.sort_values(cap_col, ascending=False).head(size_top)
+    out[cap_col] = out[cap_col].round(1 if cap_col.endswith("($B)") else 0)
+    return out
+
+
 def add_price_factors(df, period="1y", as_of=None):
     """
     야후 파이낸스에서 1년치 주가/거래량을 일괄 다운로드해 가격 기반 팩터를 추가.
