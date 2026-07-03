@@ -45,8 +45,8 @@ def get_names_cached(tickers):
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def get_prices_range(tickers, start, end):
-    return download_prices_range(list(tickers), start, end)
+def get_prices_range(tickers, start, end, interval="1d"):
+    return download_prices_range(list(tickers), start, end, interval)
 
 
 @st.cache_data(show_spinner=False, ttl=21600)
@@ -91,9 +91,24 @@ market_index = st.sidebar.selectbox(
     key="market_index_input",
 )
 
-col_a, col_b = st.sidebar.columns(2)
-period = col_a.selectbox("기간", ["1y", "2y", "3y", "5y", "10y", "max"], index=2)
-interval = col_b.selectbox("주기", ["1d", "1wk"], index=0)
+use_max = st.sidebar.checkbox(
+    "전체 기간 사용 (max)", value=False,
+    help="체크하면 상장 이후 전체 데이터를 사용합니다. "
+         "해제하면 아래에서 시작일/종료일을 직접 지정합니다.",
+)
+if use_max:
+    start_date, end_date = None, None
+else:
+    col_a, col_b = st.sidebar.columns(2)
+    start_date = col_a.date_input(
+        "시작일", value=date.today() - timedelta(days=3 * 365),
+        min_value=date(1990, 1, 1), max_value=date.today(),
+    )
+    end_date = col_b.date_input(
+        "종료일", value=date.today(),
+        min_value=date(1990, 1, 1), max_value=date.today(),
+    )
+interval = st.sidebar.selectbox("주기", ["1d", "1wk"], index=0)
 annualize = 252 if interval == "1d" else 52
 
 cov_method_label = st.sidebar.radio(
@@ -310,10 +325,22 @@ if len(tickers) < 2:
     st.error("종목을 2개 이상 입력해주세요.")
     st.stop()
 
+if not use_max:
+    if start_date >= end_date:
+        st.error("종료일은 시작일보다 뒤여야 합니다.")
+        st.stop()
+
 try:
     with st.spinner("가격 데이터를 받아오는 중..."):
-        prices = get_prices(tickers, period, interval)
-        mkt_price = get_prices(market_index, period, interval)
+        if use_max:
+            prices = get_prices(tickers, "max", interval)
+            mkt_price = get_prices(market_index, "max", interval)
+        else:
+            end_plus = str(end_date + timedelta(days=1))   # 야후는 종료일 미포함
+            prices = get_prices_range(tuple(tickers), str(start_date),
+                                      end_plus, interval)
+            mkt_price = get_prices_range((market_index,), str(start_date),
+                                         end_plus, interval)
 
     # 일부 티커가 누락되면 알림
     valid = [t for t in tickers if t in prices.columns]
@@ -326,6 +353,9 @@ try:
 
     asset_ret = to_returns(prices)[valid]
     mkt_ret = to_returns(mkt_price)
+    if len(asset_ret) < 60:
+        st.warning(f"데이터가 {len(asset_ret)}거래일뿐이라 비중·베타 추정이 "
+                   "불안정할 수 있어요. 기간을 6개월 이상으로 잡는 걸 권장합니다.")
     idx = asset_ret.index.intersection(mkt_ret.index)
     asset_ret, mkt_ret = asset_ret.loc[idx], mkt_ret.loc[idx]
 
@@ -354,7 +384,8 @@ except Exception as e:
 st.subheader("포트폴리오 요약")
 cov_caption = (f"공분산: EWMA (λ={ewma_lambda})" if cov_method == "ewma"
                else "공분산: 표본공분산")
-st.caption(f"{cov_caption} · 기간 {period} · 주기 {interval}")
+period_label = "전체(max)" if use_max else f"{start_date} ~ {end_date}"
+st.caption(f"{cov_caption} · 기간 {period_label} · 주기 {interval}")
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("기대수익률 (CAPM)", f"{port_exp_ret:.2%}")
 m2.metric("연변동성 (리스크)", f"{port_vol:.2%}")
